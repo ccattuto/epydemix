@@ -1,10 +1,12 @@
 """Tests for the CLI (Click commands) and config loader."""
 
+import copy
 import json
 import os
 import tempfile
 
 import numpy as np
+import pandas as pd
 import pytest
 from click.testing import CliRunner
 
@@ -430,6 +432,77 @@ class TestCLIRun:
         runner = CliRunner()
         result = runner.invoke(cli, ["run", path])
         assert result.exit_code != 0
+
+
+class TestCLIRunSeed:
+    """A run must always resolve, record and honour an RNG seed."""
+
+    @staticmethod
+    def _run(tmp_path, config, name):
+        config_path = _write_yaml(tmp_path, config, name=f"{name}.yaml")
+        output_path = str(tmp_path / f"{name}.epx")
+        result = CliRunner().invoke(
+            cli, ["run", config_path, "--output", output_path]
+        )
+        assert result.exit_code == 0, f"CLI failed: {result.output}"
+        with open(os.path.join(output_path, "manifest.json")) as fh:
+            return output_path, json.load(fh)
+
+    def test_seed_is_recorded_even_when_not_requested(self, tmp_path):
+        bundle, manifest = self._run(tmp_path, MINIMAL_CONFIG, "auto")
+        seed = manifest["simulation"]["seed"]
+        assert isinstance(seed, int)
+        assert manifest["provenance"]["seed"] == seed
+        # The stored config must carry it too, so the bundle is self-contained.
+        stored = load_config(os.path.join(bundle, "config.yaml"))
+        assert stored["simulation"]["seed"] == seed
+
+    def test_explicit_seed_is_honoured(self, tmp_path):
+        config = copy.deepcopy(MINIMAL_CONFIG)
+        config["simulation"]["seed"] = 12345
+        _, manifest = self._run(tmp_path, config, "explicit")
+        assert manifest["simulation"]["seed"] == 12345
+
+    def test_same_seed_reproduces_trajectories(self, tmp_path):
+        config = copy.deepcopy(MINIMAL_CONFIG)
+        config["simulation"]["seed"] = 999
+        bundle_a, _ = self._run(tmp_path, config, "rep_a")
+        bundle_b, _ = self._run(tmp_path, config, "rep_b")
+        a = pd.read_parquet(os.path.join(bundle_a, "compartments.parquet"))
+        b = pd.read_parquet(os.path.join(bundle_b, "compartments.parquet"))
+        assert a.equals(b)
+
+    def test_unseeded_runs_differ(self, tmp_path):
+        bundle_a, man_a = self._run(tmp_path, MINIMAL_CONFIG, "free_a")
+        bundle_b, man_b = self._run(tmp_path, MINIMAL_CONFIG, "free_b")
+        assert man_a["simulation"]["seed"] != man_b["simulation"]["seed"]
+        a = pd.read_parquet(os.path.join(bundle_a, "compartments.parquet"))
+        b = pd.read_parquet(os.path.join(bundle_b, "compartments.parquet"))
+        assert not a.equals(b)
+
+    def test_rerunning_a_stored_config_reproduces_the_bundle(self, tmp_path):
+        """The property that makes a bundle reproducible, not just descriptive."""
+        original, manifest = self._run(tmp_path, MINIMAL_CONFIG, "orig")
+        replay_out = str(tmp_path / "replay.epx")
+        result = CliRunner().invoke(
+            cli,
+            ["run", os.path.join(original, "config.yaml"), "--output", replay_out],
+        )
+        assert result.exit_code == 0, f"CLI failed: {result.output}"
+        with open(os.path.join(replay_out, "manifest.json")) as fh:
+            replayed = json.load(fh)
+        assert replayed["simulation"]["seed"] == manifest["simulation"]["seed"]
+        a = pd.read_parquet(os.path.join(original, "compartments.parquet"))
+        b = pd.read_parquet(os.path.join(replay_out, "compartments.parquet"))
+        assert a.equals(b)
+
+    @pytest.mark.parametrize("bad", ["abc", 1.5, True, -1])
+    def test_invalid_seed_is_rejected(self, bad):
+        config = copy.deepcopy(MINIMAL_CONFIG)
+        config["simulation"]["seed"] = bad
+        report = validate_config(config)
+        assert not report["valid"]
+        assert any("seed" in e for e in report["errors"])
 
 
 class TestCLIInspect:

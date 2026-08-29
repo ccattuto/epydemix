@@ -198,6 +198,7 @@ simulation:
   end_date: "2020-06-30"           # ISO date, required
   n_simulations: 100               # default: 100
   dt: 1.0                          # integration timestep in days (see below)
+  seed: 42                         # optional; drawn and recorded if omitted
 
 # ── Initial conditions ───────────────────────────────────────────
 # Each compartment value can be a fraction (float) or an absolute count (int).
@@ -337,7 +338,7 @@ The `manifest.json` is the bridge between the opaque Parquet files and the agent
 
 - `model`: compartments (alphabetically sorted list)
 - `population`: `demographic_groups` — ordered list of group names matching Parquet column order
-- `simulation`: n_simulations, start/end dates, n_timesteps
+- `simulation`: n_simulations, start/end dates, n_timesteps, `seed` (see Reproducibility below)
 - `parameters_used`: scalar parameter values (exact, unrounded — `epydemix inspect manifest` skips rounding entirely so these are preserved at full precision)
 - `files`: for each Parquet file, the full column schema with dtypes and descriptions
 - `usage_hints`: instructions for CLI inspection and custom Python access
@@ -373,7 +374,9 @@ Every bundle produced by the CLI includes a `provenance` key in the manifest tha
   "provenance": {
     "command": "project",
     "parent_bundle": "/abs/path/to/calibration.epx",
-    "config_path": "/abs/path/to/projection.yaml"
+    "config_path": "/abs/path/to/projection.yaml",
+    "config_sha256": "fad2f1f19af81ebcd...",
+    "seed": 1829465027
   }
 }
 ```
@@ -383,10 +386,39 @@ Fields vary by command:
 | Field | Present in | Description |
 |-------|-----------|-------------|
 | `command` | all | The CLI command that created this bundle (`run`, `calibrate`, `project`) |
-| `config_path` | all | Absolute path to the config file used |
+| `config_path` | all | Absolute path to the config file used — may go stale; prefer `config_sha256` |
+| `config_sha256` | all | Hash of the resolved config actually used, which is stored in the bundle |
+| `seed` | `run`, `project` | RNG seed for the run (see Reproducibility below) |
 | `parent_bundle` | `project` only | Absolute path to the calibration bundle the projection sampled from |
 
 Use provenance to trace the dependency chain: a projection bundle points back to its calibration bundle, and both point to their config files. This makes it possible to reconstruct the full lineage of any result.
+
+### Reproducibility
+
+**Every CLI run is seeded, and the seed is always recorded.** You do not have to ask for this and you should not implement it yourself.
+
+- If `simulation.seed` is set in the config, it is used.
+- If it is absent, the CLI draws one, uses it, and writes it back — into the manifest (`simulation.seed` and `provenance.seed`) *and* into the `config.yaml` stored inside the bundle.
+
+The practical consequence: **re-running a bundle's stored config reproduces that bundle's exact realizations**, not merely the same setup.
+
+```bash
+epydemix run results.epx/config.yaml -o replay.epx   # identical trajectories
+```
+
+To pin a run up front, set the seed explicitly:
+
+```yaml
+simulation:
+  start_date: "2024-01-01"
+  end_date: "2024-06-30"
+  n_simulations: 200
+  seed: 42            # optional; a random one is drawn and recorded if omitted
+```
+
+**Do not hand-roll stochastic runs in custom Python when you need reproducibility.** Driving `run_simulations()` directly bypasses seed resolution and manifest recording, so the result is not reproducible from the bundle. Use `epydemix run` for anything whose output you intend to report, and reserve custom Python for *analysis* of the Parquet files it produces.
+
+This applies with particular force to parameter sweeps: run each point through `epydemix run` with its own config so every point carries its own seed and config, rather than looping inside one Python process where that lineage is lost.
 
 ### Reading Parquet with custom Python
 

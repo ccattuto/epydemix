@@ -2,6 +2,7 @@
 
 import copy
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -175,6 +176,34 @@ def _check_ic_normalization(ic_cfg: Dict[str, Any], tol: float = 1e-4) -> List[s
     return errors
 
 
+def _validate_seed(sim_cfg: Dict[str, Any], errors: list) -> None:
+    """Check an optional ``simulation.seed``. Booleans are ints in Python."""
+    seed = sim_cfg.get("seed")
+    if seed is None:
+        return
+    if not isinstance(seed, int) or isinstance(seed, bool):
+        errors.append("simulation.seed must be an integer")
+    elif seed < 0:
+        errors.append("simulation.seed must be non-negative")
+
+
+def resolve_seed(sim_cfg: Dict[str, Any]) -> int:
+    """Return the seed for a run, drawing one if the config does not set it.
+
+    A seed is always resolved and always recorded, rather than being an opt-in
+    the caller has to remember: reproducibility that depends on someone electing
+    to ask for it is not reproducibility.
+    """
+    seed = sim_cfg.get("seed")
+    if seed is None:
+        # 32 bits, not 64: the seed is written to manifest.json, and integers
+        # above 2**53 do not survive a round trip through consumers that parse
+        # JSON numbers as IEEE-754 doubles. A silently altered seed would defeat
+        # the purpose of recording it.
+        seed = int.from_bytes(os.urandom(4), "big")
+    return int(seed)
+
+
 def validate_config(config: Dict[str, Any]) -> Dict[str, Any]:
     """Validate a config dict and return structured errors/warnings.
 
@@ -197,6 +226,7 @@ def validate_config(config: Dict[str, Any]) -> Dict[str, Any]:
             errors.append("simulation.start_date is required")
         if "end_date" not in sim:
             errors.append("simulation.end_date is required")
+        _validate_seed(sim, errors)
 
     # Model section validation
     model_cfg = config.get("model", {})
@@ -609,12 +639,20 @@ def run_from_config(
 
     ic = build_initial_conditions(config, model)
 
+    # Resolve a seed even when the config omits one, and write it back into the
+    # config that gets stored in the bundle, so the stored config re-runs to the
+    # same realizations rather than merely the same setup.
+    seed = resolve_seed(sim_cfg)
+    config = copy.deepcopy(config)
+    config.setdefault("simulation", {})["seed"] = seed
+
     results = model.run_simulations(
         start_date=sim_cfg["start_date"],
         end_date=sim_cfg["end_date"],
         Nsim=sim_cfg.get("n_simulations", DEFAULT_N_SIMULATIONS),
         dt=sim_cfg.get("dt", 1.0),
         initial_conditions_dict=ic,
+        rng=np.random.default_rng(seed),
     )
 
     return results, config
@@ -1028,6 +1066,7 @@ def validate_projection_config(
             errors.append("simulation.start_date is required")
         if "end_date" not in sim:
             errors.append("simulation.end_date is required")
+        _validate_seed(sim, errors)
 
     # Must have model section
     if "model" not in config:
@@ -1114,11 +1153,18 @@ def project_from_config(
     # --- sample and simulate ----------------------------------------------
     from ..model.simulation_results import SimulationResults
 
+    # One generator drives both the posterior draw and the trajectories, so a
+    # projection is reproducible end to end from the recorded seed.
+    seed = resolve_seed(sim_cfg)
+    rng = np.random.default_rng(seed)
+    config = copy.deepcopy(config)
+    config.setdefault("simulation", {})["seed"] = seed
+
     all_trajectories = []
     posterior_arr = posterior_df.values  # (n_particles, n_params)
 
     for _ in range(n_simulations):
-        idx = np.random.choice(len(posterior_arr), p=w)
+        idx = rng.choice(len(posterior_arr), p=w)
         sampled_params = dict(zip(param_names, posterior_arr[idx]))
 
         # Update model parameters
@@ -1131,6 +1177,7 @@ def project_from_config(
             end_date=sim_cfg["end_date"],
             dt=sim_cfg.get("dt", 1.0),
             initial_conditions_dict=ic,
+            rng=rng,
         )
         all_trajectories.append(traj)
 
