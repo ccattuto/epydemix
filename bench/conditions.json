@@ -1,0 +1,28 @@
+{
+  "_comment": [
+    "Experimental conditions for the epydemix agent benchmark.",
+    "Each condition pins a git branch, gets its own venv, and gets its own prompt preamble.",
+    "'common_suffix' is appended to the first turn of every task in every condition so that",
+    "output location is identical across arms and artifacts are easy to collect."
+  ],
+
+  "common_suffix": "\n\nWork only inside your current working directory — that is the repository root for this session. Do not read or write anything outside it. Put every file you produce in a subdirectory called `outputs/` (create it). When you are done, give a short summary of your results in your final message.",
+
+  "conditions": {
+    "baseline": {
+      "label": "library only (main)",
+      "branch": "main",
+      "install_extras": ["pyarrow>=12.0", "click>=8.0", "pyyaml>=6.0"],
+      "install_spec": ".",
+      "preamble": "You are working inside the epydemix repository. epydemix is a Python library for compartmental epidemic modeling. The library source is in `epydemix/`, the API documentation in `docs/`, worked examples as Jupyter notebooks in `tutorials/`, and an overview in `README.md`. The package is already installed in the active Python environment. Consult whatever you need, then carry out the following task.\n\n"
+    },
+
+    "framework": {
+      "label": "agent framework (AGENT.md + CLI)",
+      "branch": "agent-framework",
+      "install_extras": [],
+      "install_spec": ".[agent]",
+      "preamble": "Read AGENT.md at the repo root, then carry out the following task.\n\n"
+    }
+  }
+}
