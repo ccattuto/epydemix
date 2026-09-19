@@ -44,6 +44,10 @@ epydemix defaults covid19
 # 5. Validate before running
 epydemix validate config.yaml
 # → {"valid": true, "errors": [], "warnings": [...]}
+# Checks structure *and* content: parameter names and ranges against the
+# model's registry, dates and simulation window, initial-condition compartment
+# names, and (custom models) that transitions reference declared compartments
+# and parameters. `epydemix run` runs the same checks and refuses on error.
 
 # 6. Run the simulation
 epydemix run config.yaml --output results.epx
@@ -116,7 +120,7 @@ epydemix defaults              # list available
 epydemix defaults covid19      # full detail for one disease
 ```
 
-The JSON Schema output can be used to validate parameter values before running. Each parameter includes `minimum`, `maximum`, `default`, and `description` fields.
+Each parameter in the JSON Schema includes `minimum`, `maximum`, `default`, and `description` fields. You do not need to check these yourself: `epydemix validate` rejects unknown parameter names (with a suggestion) and out-of-range values using the same registry. It also rejects parameters the chosen model would silently ignore — for example `vaccine_efficacy` without `model.vaccination: true`, or `incubation_rate` on an SIR model.
 
 **Warning:** disease preset `transmission_rate` values are calibrated assuming homogeneous mixing. When using a named population with a real contact matrix, the effective R₀ will be much higher than intended. Treat preset values as starting points only and sanity-check epidemic dynamics (peak timing, attack rate) before drawing conclusions.
 
@@ -209,10 +213,10 @@ simulation:
 # dict         → per-group control (see below); add `unit: count` for counts
 #
 initial_conditions:
-  S: 0.999      # float → fraction
-  E: 0.0005
-  I: 50         # int → 50 individuals distributed proportionally across groups
-  R: 0.0
+  Susceptible: 0.999   # float → fraction
+  Exposed: 0.0005
+  Infected: 50         # int → 50 individuals distributed proportionally across groups
+  Recovered: 0.0
 
 # NOTE — compartment name convention for initial_conditions:
 #   custom models  → use the short names you defined (S, I, R, ...)
